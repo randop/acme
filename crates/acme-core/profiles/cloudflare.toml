@@ -1,0 +1,27 @@
+name = "cloudflare"
+base_url = "https://api.cloudflare.com/client/v4"
+allowed_hosts = ["api.cloudflare.com"]
+token_env = "ACME_DNS_CLOUDFLARE_TOKEN"
+auth_type = "bearer"
+
+[[zone_lookup]]
+method = "GET"
+url = "/zones?name={{candidate_zone}}&per_page=100"
+extract = { zone_id = "$.result[0].id" }
+
+[[add]]
+method = "POST"
+url = "/zones/{{zone_id}}/dns_records"
+json = { type = "TXT", name = "{{fulldomain}}", content = "{{txt_value}}", ttl = 120 }
+expect_status = [200]
+extract = { record_id = "$.result.id" }
+
+[[find]]
+method = "GET"
+url = "/zones/{{zone_id}}/dns_records?type=TXT&name={{fulldomain}}&content={{txt_value}}"
+extract = { record_id = "$.result[0].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/zones/{{zone_id}}/dns_records/{{record_id}}"
+expect_status = [200]

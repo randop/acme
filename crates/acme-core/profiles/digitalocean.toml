@@ -1,0 +1,27 @@
+name = "digitalocean"
+base_url = "https://api.digitalocean.com/v2"
+allowed_hosts = ["api.digitalocean.com"]
+token_env = "ACME_DNS_DIGITALOCEAN_TOKEN"
+auth_type = "bearer"
+
+[[zone_lookup]]
+method = "GET"
+url = "/domains?name={{candidate_zone}}"
+extract = { zone_id = "$.domains[0].name" }
+
+[[add]]
+method = "POST"
+url = "/domains/{{zone_id}}/records"
+json = { type = "TXT", name = "{{record_name}}", data = "{{txt_value}}", ttl = 120 }
+expect_status = [201]
+extract = { record_id = "$.domain_record.id" }
+
+[[find]]
+method = "GET"
+url = "/domains/{{zone_id}}/records?type=TXT&name={{record_name}}"
+extract = { record_id = "$.domain_records[0].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/domains/{{zone_id}}/records/{{record_id}}"
+expect_status = [204]

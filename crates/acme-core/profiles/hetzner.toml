@@ -1,0 +1,29 @@
+name = "hetzner"
+base_url = "https://dns.hetzner.com/api/v1"
+allowed_hosts = ["dns.hetzner.com"]
+token_env = "ACME_DNS_HETZNER_TOKEN"
+auth_type = "bearer"
+# Hetzner DNS API uses Bearer token authentication
+# Credentials: HETZNER_TOKEN
+
+[[zone_lookup]]
+method = "GET"
+url = "/zones?name={{candidate_zone}}"
+extract = { zone_id = "$.zones[0].id" }
+
+[[add]]
+method = "POST"
+url = "/records"
+json = { zone_id = "{{zone_id}}", name = "{{record_name}}", type = "TXT", value = "{{txt_value}}", ttl = 120 }
+expect_status = [201]
+extract = { record_id = "$.record.id" }
+
+[[find]]
+method = "GET"
+url = "/records?zone_id={{zone_id}}&name={{record_name}}&type=TXT"
+extract = { record_id = "$.records[0].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/records/{{record_id}}"
+expect_status = [204]

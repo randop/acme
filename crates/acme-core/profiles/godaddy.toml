@@ -1,0 +1,32 @@
+name = "godaddy"
+base_url = "https://api.godaddy.com/v1"
+allowed_hosts = ["api.godaddy.com"]
+token_env = "ACME_DNS_GODADDY_KEY"
+auth_type = "header"
+auth_header = "Authorization"
+# GoDaddy uses "sso-key KEY:SECRET" format; we construct the full header value in the env var
+# ACME_DNS_GODADDY_KEY="sso-key API_KEY:API_SECRET"
+
+[[zone_lookup]]
+method = "GET"
+url = "/domains/{{candidate_zone}}/records/TXT/@"
+extract = { zone_id = "$.domain" }
+# Note: GoDaddy returns 404 if not found; zone lookup falls back to domain details endpoint
+
+[[add]]
+method = "PUT"
+url = "/domains/{{zone_id}}/records/TXT/{{record_name}}"
+json = [{ data = "{{txt_value}}" }]
+expect_status = [200]
+
+[[find]]
+method = "GET"
+url = "/domains/{{zone_id}}/records/TXT/{{record_name}}"
+# Returns array of records; we need to find matching one
+extract = { record_id = "$.0.name" }
+# Note: GoDaddy PUT replaces all records for a name; find is used for readback verification
+
+[[remove]]
+method = "DELETE"
+url = "/domains/{{zone_id}}/records/TXT/{{record_name}}"
+expect_status = [200]

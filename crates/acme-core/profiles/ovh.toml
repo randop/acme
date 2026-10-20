@@ -1,0 +1,35 @@
+name = "ovh"
+base_url = "https://eu.api.ovh.com/1.0"
+allowed_hosts = ["eu.api.ovh.com", "api.us.ovhcloud.com", "ca.api.ovh.com", "eu.api.kimsufi.com", "ca.api.kimsufi.com", "eu.api.soyoustart.com", "ca.api.soyoustart.com"]
+token_env = "ACME_DNS_OVH_AK"
+auth_type = "query"
+# OVH uses custom HMAC-SHA1 authentication:
+# Signature = $1$SHA1(AS+CK+METHOD+URL+BODY+TIMESTAMP)
+# Headers: X-Ovh-Application, X-Ovh-Signature, X-Ovh-Timestamp, X-Ovh-Consumer
+# Credentials: OVH_AK (Application Key), OVH_AS (Application Secret), OVH_CK (Consumer Key)
+# Optional: OVH_END_POINT (ovh-eu, ovh-us, ovh-ca, kimsufi-eu, kimsufi-ca, soyoustart-eu, soyoustart-ca)
+
+[[zone_lookup]]
+method = "GET"
+url = "/domain/zone/{{candidate_zone}}"
+extract = { zone_id = "$.name" }
+
+[[add]]
+method = "POST"
+url = "/domain/zone/{{zone_id}}/record"
+json = { fieldType = "TXT", subDomain = "{{record_name}}", target = "{{txt_value}}", ttl = 60 }
+expect_status = [200]
+extract = { record_id = "$.id" }
+
+[[find]]
+method = "GET"
+url = "/domain/zone/{{zone_id}}/record?fieldType=TXT&subDomain={{record_name}}"
+extract = { record_id = "$..[?(@.target=='{{txt_value}}')].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/domain/zone/{{zone_id}}/record/{{record_id}}"
+expect_status = [200]
+
+# Note: OVH requires HMAC-SHA1 signature with specific canonical string format.
+# A native DnsProvider implementation is required for proper authentication.

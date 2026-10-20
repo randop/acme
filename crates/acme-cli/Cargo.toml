@@ -1,0 +1,28 @@
+[package]
+name = "acme-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "acme"
+path = "src/main.rs"
+
+[dependencies]
+acme-state = { path = "../acme-state" }
+acme-store = { path = "../acme-store" }
+acme-challenge = { path = "../acme-challenge" }
+acme-core = { path = "../acme-core" }
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+dirs.workspace = true
+libc.workspace = true
+rusqlite.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

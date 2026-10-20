@@ -1,0 +1,16 @@
+name = "epik"
+base_url = "https://usersapiv2.epik.com/v2"
+allowed_hosts = ["usersapiv2.epik.com"]
+token_env = "ACME_DNS_EPIK_SIGNATURE"
+auth_type = "query"
+zone_lookup_path = "/domains/{{candidate_zone}}/records"
+zone_id_path = "data.name"
+find_path = "/domains/{{zone_id}}/records"
+find_records_path = "data.records"
+find_id_path = "id"
+find_name_path = "name"
+find_type_path = "type"
+find_value_path = "data"
+add_path = "/domains/{{zone_id}}/records"
+add_body = '{"create_host_records_payload":{"HOST":"{{record_name}}","TYPE":"TXT","DATA":"{{txt_value}}","TTL":120}}'
+remove_path = "/domains/{{zone_id}}/records?ID={{record_id}}"

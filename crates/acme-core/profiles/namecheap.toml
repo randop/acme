@@ -1,0 +1,35 @@
+name = "namecheap"
+base_url = "https://api.namecheap.com/xml.response"
+allowed_hosts = ["api.namecheap.com"]
+token_env = "ACME_DNS_NAMECHEAP_API_KEY"
+auth_type = "query"
+# Credentials: NAMECHEAP_API_KEY, NAMECHEAP_USERNAME, NAMECHEAP_SOURCEIP (required)
+# Note: Namecheap uses XML API with complex host list replacement (setHosts replaces all records)
+
+[[zone_lookup]]
+method = "POST"
+url = ""
+form = { ApiUser = "{{env.NAMECHEAP_USERNAME}}", ApiKey = "{{env.ACME_DNS_NAMECHEAP_API_KEY}}", UserName = "{{env.NAMECHEAP_USERNAME}}", Command = "namecheap.domains.getList", ClientIp = "{{env.NAMECHEAP_SOURCEIP}}" }
+extract = { zone_id = "$.Domain[0].@Name" }
+
+[[add]]
+method = "POST"
+url = ""
+form = { ApiUser = "{{env.NAMECHEAP_USERNAME}}", ApiKey = "{{env.ACME_DNS_NAMECHEAP_API_KEY}}", UserName = "{{env.NAMECHEAP_USERNAME}}", Command = "namecheap.domains.dns.setHosts", ClientIp = "{{env.NAMECHEAP_SOURCEIP}}", SLD = "{{sld}}", TLD = "{{tld}}", "HostName1" = "{{record_name}}", "RecordType1" = "TXT", "Address1" = "{{txt_value}}", "MXPref1" = "10", "TTL1" = "120" }
+expect_status = [200]
+
+[[find]]
+method = "POST"
+url = ""
+form = { ApiUser = "{{env.NAMECHEAP_USERNAME}}", ApiKey = "{{env.ACME_DNS_NAMECHEAP_API_KEY}}", UserName = "{{env.NAMECHEAP_USERNAME}}", Command = "namecheap.domains.dns.getHosts", ClientIp = "{{env.NAMECHEAP_SOURCEIP}}", SLD = "{{sld}}", TLD = "{{tld}}" }
+extract = { record_id = "$.host[?(@.Name=='{{record_name}}' && @.Type=='TXT')].HostId" }
+
+[[remove]]
+method = "POST"
+url = ""
+form = { ApiUser = "{{env.NAMECHEAP_USERNAME}}", ApiKey = "{{env.ACME_DNS_NAMECHEAP_API_KEY}}", UserName = "{{env.NAMECHEAP_USERNAME}}", Command = "namecheap.domains.dns.setHosts", ClientIp = "{{env.NAMECHEAP_SOURCEIP}}", SLD = "{{sld}}", TLD = "{{tld}}" }
+expect_status = [200]
+
+# Note: Namecheap's API replaces ALL records on setHosts. The declarative profile cannot
+# correctly implement add/remove without fetching existing records first.
+# A native DnsProvider implementation is strongly recommended for Namecheap.

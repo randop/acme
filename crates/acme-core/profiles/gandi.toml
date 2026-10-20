@@ -1,0 +1,34 @@
+name = "gandi"
+base_url = "https://api.gandi.net/v5/livedns"
+allowed_hosts = ["api.gandi.net"]
+token_env = "ACME_DNS_GANDI_LIVEDNS_TOKEN"
+auth_type = "bearer"
+# Also supports deprecated Apikey auth: auth_type = "header", auth_header = "Authorization"
+# Value format: "Apikey YOUR_API_KEY" or "Bearer YOUR_TOKEN"
+
+[[zone_lookup]]
+method = "GET"
+url = "/domains/{{candidate_zone}}"
+extract = { zone_id = "$.fqdn" }
+
+[[add]]
+method = "PUT"
+url = "/domains/{{zone_id}}/records/{{record_name}}/TXT"
+json = { rrset_ttl = 300, rrset_values = ["{{txt_value}}"] }
+expect_status = [201]
+
+[[find]]
+method = "GET"
+url = "/domains/{{zone_id}}/records/{{record_name}}/TXT"
+extract = { record_id = "$.rrset_name" }
+
+[[remove]]
+method = "PUT"
+url = "/domains/{{zone_id}}/records/{{record_name}}/TXT"
+json = { rrset_ttl = 300, rrset_values = [] }
+expect_status = [201]
+
+# Note: Gandi LiveDNS replaces the entire rrset_values array on PUT.
+# To preserve other TXT values, the remove operation must first fetch existing values
+# and rewrite the rrset without the target value. A native DnsProvider implementation
+# is recommended for correct add/remove semantics with multiple values.

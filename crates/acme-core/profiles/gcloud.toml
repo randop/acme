@@ -1,0 +1,33 @@
+name = "gcloud"
+base_url = "https://dns.googleapis.com/dns/v1"
+allowed_hosts = ["dns.googleapis.com"]
+token_env = "ACME_DNS_GCLOUD_PROJECT"
+auth_type = "bearer"
+# Uses Google Cloud service account JWT for authentication (native signer required)
+# The profile uses the service account credentials to obtain an OAuth2 token
+
+[[zone_lookup]]
+method = "GET"
+url = "/projects/{{env.ACME_DNS_GCLOUD_PROJECT}}/managedZones?dnsName={{candidate_zone}}."
+extract = { zone_id = "$.managedZones[0].name" }
+
+[[add]]
+method = "POST"
+url = "/projects/{{env.ACME_DNS_GCLOUD_PROJECT}}/managedZones/{{zone_id}}/rrsets"
+json = { kind = "dns#resourceRecordSet", name = "{{fulldomain}}.", type = "TXT", ttl = 60, rrdatas = ["{{txt_value}}"] }
+expect_status = [200]
+extract = { record_id = "$.name" }
+
+[[find]]
+method = "GET"
+url = "/projects/{{env.ACME_DNS_GCLOUD_PROJECT}}/managedZones/{{zone_id}}/rrsets?name={{fulldomain}}.&type=TXT"
+extract = { record_id = "$.rrsets[0].name" }
+
+[[remove]]
+method = "DELETE"
+url = "/projects/{{env.ACME_DNS_GCLOUD_PROJECT}}/managedZones/{{zone_id}}/rrsets/{{fulldomain}}./TXT"
+expect_status = [200]
+
+# Note: Google Cloud DNS requires OAuth2 service account JWT authentication.
+# A native DnsProvider implementation using google-cloud-auth or similar is required.
+# The declarative profile cannot handle the JWT token generation and refresh.

@@ -1,0 +1,34 @@
+name = "clouddns"
+base_url = "https://admin.vshosting.cloud/clouddns"
+allowed_hosts = ["admin.vshosting.cloud"]
+token_env = "ACME_DNS_CLOUDDNS_EMAIL"
+auth_type = "bearer"
+# Uses email/password login to get Bearer token, then uses token for API calls
+# Credentials: CLOUDDNS_EMAIL, CLOUDDNS_PASSWORD, CLOUDDNS_CLIENT_ID
+# The profile engine cannot handle the login flow; a native DnsProvider is required.
+
+[[zone_lookup]]
+method = "POST"
+url = "/domain/search"
+json = { search = [{ name = "clientId", operator = "eq", value = "{{env.CLOUDDNS_CLIENT_ID}}" }, { name = "domainName", operator = "eq", value = "{{candidate_zone}}." }] }
+extract = { zone_id = "$..[?(@.domainName=='{{candidate_zone}}.')].id" }
+
+[[add]]
+method = "POST"
+url = "/record-txt"
+json = { type = "TXT", name = "{{fulldomain}}.", value = "{{txt_value}}", domainId = "{{zone_id}}" }
+expect_status = [200]
+
+[[find]]
+method = "GET"
+url = "/domain/{{zone_id}}"
+extract = { record_id = "$..[?(@.name=='{{fulldomain}}.' && @.type=='TXT')].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/record/{{record_id}}"
+expect_status = [200]
+
+# Note: CloudDNS (vshosting) requires login to get Bearer token, then domain search with clientId.
+# The login flow and domain search by clientId cannot be expressed in declarative profile.
+# A native DnsProvider implementation is required for this provider.

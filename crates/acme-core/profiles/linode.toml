@@ -1,0 +1,29 @@
+name = "linode"
+base_url = "https://api.linode.com/v4"
+allowed_hosts = ["api.linode.com"]
+token_env = "ACME_DNS_LINODE_API_KEY"
+auth_type = "bearer"
+
+[[zone_lookup]]
+method = "GET"
+url = "/domains"
+headers = { "X-Filter" = "{\"domain\":\"{{candidate_zone}}\"}" }
+extract = { zone_id = "$.data[0].id" }
+
+[[add]]
+method = "POST"
+url = "/domains/{{zone_id}}/records"
+json = { type = "TXT", name = "{{record_name}}", target = "{{txt_value}}", ttl_sec = 300 }
+expect_status = [200]
+extract = { record_id = "$.id" }
+
+[[find]]
+method = "GET"
+url = "/domains/{{zone_id}}/records"
+headers = { "X-Filter" = "{\"type\":\"TXT\",\"name\":\"{{record_name}}\"}" }
+extract = { record_id = "$.data[0].id" }
+
+[[remove]]
+method = "DELETE"
+url = "/domains/{{zone_id}}/records/{{record_id}}"
+expect_status = [200]
