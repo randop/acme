@@ -1,0 +1,34 @@
+name = "azure"
+base_url = "https://management.azure.com"
+allowed_hosts = ["management.azure.com"]
+token_env = "ACME_DNS_AZURE_SUBSCRIPTION_ID"
+auth_type = "bearer"
+# Uses Azure AD OAuth2 client credentials (service principal) or managed identity
+# Credentials: AZUREDNS_SUBSCRIPTIONID, AZUREDNS_TENANTID, AZUREDNS_APPID, AZUREDNS_CLIENTSECRET
+# Optional: AZUREDNS_BEARERTOKEN (provided directly), AZUREDNS_MANAGEDIDENTITY=true
+# Optional: AZUREDNS_PRIVATEZONE=true for private DNS zones
+
+[[zone_lookup]]
+method = "GET"
+url = "/subscriptions/{{env.ACME_DNS_AZURE_SUBSCRIPTION_ID}}/providers/Microsoft.Network/dnszones?$top=500&api-version=2017-09-01"
+extract = { zone_id = "$..[?(@.name=='{{candidate_zone}}')].id" }
+
+[[add]]
+method = "PUT"
+url = "{{zone_id}}/TXT/{{record_name}}?api-version=2017-09-01"
+json = { properties = { metadata = { acmetscheck = "{{timestamp}}" }, TTL = 10, TXTRecords = [{ value = "{{txt_value}}" }] } }
+expect_status = [200, 201]
+
+[[find]]
+method = "GET"
+url = "{{zone_id}}/TXT/{{record_name}}?api-version=2017-09-01"
+extract = { record_id = "$.name" }
+
+[[remove]]
+method = "DELETE"
+url = "{{zone_id}}/TXT/{{record_name}}?api-version=2017-09-01"
+expect_status = [200, 204]
+
+# Note: Azure DNS requires OAuth2 token from service principal or managed identity.
+# A native DnsProvider implementation using Azure Identity SDK is required.
+# The declarative profile cannot handle the token acquisition flow.

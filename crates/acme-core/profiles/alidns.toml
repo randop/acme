@@ -1,0 +1,34 @@
+name = "alidns"
+base_url = "https://alidns.aliyuncs.com"
+allowed_hosts = ["alidns.aliyuncs.com"]
+token_env = "ACME_DNS_ALI_KEY"
+auth_type = "query"
+# Uses HMAC-SHA1 signature; requires native signer
+# Credentials: Ali_Key (AccessKeyId), Ali_Secret (AccessKeySecret)
+# The profile engine supports "query" auth with SIGNATURE parameter
+
+[[zone_lookup]]
+method = "GET"
+url = "/?Action=DescribeDomainRecords&DomainName={{candidate_zone}}&Format=json&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Timestamp={{timestamp}}&Version=2015-01-09&SignatureNonce={{nonce}}&AccessKeyId={{env.ACME_DNS_ALI_KEY}}&Signature={{signature}}"
+extract = { zone_id = "$.DomainRecords.Record[0].DomainName" }
+
+[[add]]
+method = "POST"
+url = "/?Action=AddDomainRecord&DomainName={{zone}}&RR={{record_name}}&Type=TXT&Value={{txt_value}}&Format=json&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Timestamp={{timestamp}}&Version=2015-01-09&SignatureNonce={{nonce}}&AccessKeyId={{env.ACME_DNS_ALI_KEY}}&Signature={{signature}}"
+expect_status = [200]
+extract = { record_id = "$.RecordId" }
+
+[[find]]
+method = "GET"
+url = "/?Action=DescribeDomainRecords&DomainName={{zone}}&RRKeyWord={{record_name}}&TypeKeyWord=TXT&Format=json&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Timestamp={{timestamp}}&Version=2015-01-09&SignatureNonce={{nonce}}&AccessKeyId={{env.ACME_DNS_ALI_KEY}}&Signature={{signature}}"
+extract = { record_id = "$.DomainRecords.Record[0].RecordId" }
+
+[[remove]]
+method = "POST"
+url = "/?Action=DeleteDomainRecord&RecordId={{record_id}}&Format=json&SignatureMethod=HMAC-SHA1&SignatureVersion=1.0&Timestamp={{timestamp}}&Version=2015-01-09&SignatureNonce={{nonce}}&AccessKeyId={{env.ACME_DNS_ALI_KEY}}&Signature={{signature}}"
+expect_status = [200]
+
+# Note: Alibaba Cloud DNS requires HMAC-SHA1 request signing with upper-case hex encoding.
+# The profile engine's "query" auth_type with SIGNATURE parameter cannot handle the complex
+# canonical request string. A native DnsProvider implementation is recommended.
+# For simple use, set ACME_DNS_ALI_SIGNATURE to a pre-computed signature (short-lived).

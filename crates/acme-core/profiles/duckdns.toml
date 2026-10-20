@@ -1,0 +1,35 @@
+name = "duckdns"
+base_url = "https://www.duckdns.org"
+allowed_hosts = ["www.duckdns.org"]
+token_env = "ACME_DNS_DUCKDNS_TOKEN"
+auth_type = "query"
+# DuckDNS uses simple GET API with token in query string
+# Credentials: DuckDNS_Token
+
+[[zone_lookup]]
+method = "GET"
+url = "/update"
+query = { domains = "{{candidate_zone}}", token = "{{env.ACME_DNS_DUCKDNS_TOKEN}}" }
+extract = { zone_id = "$.domain" }
+
+[[add]]
+method = "GET"
+url = "/update"
+query = { domains = "{{zone}}", token = "{{env.ACME_DNS_DUCKDNS_TOKEN}}", txt = "{{txt_value}}" }
+expect_status = [200]
+
+[[find]]
+method = "GET"
+url = "/update"
+query = { domains = "{{zone}}", token = "{{env.ACME_DNS_DUCKDNS_TOKEN}}" }
+extract = { record_id = "$.txt" }
+
+[[remove]]
+method = "GET"
+url = "/update"
+query = { domains = "{{zone}}", token = "{{env.ACME_DNS_DUCKDNS_TOKEN}}", txt = "", clear = "true" }
+expect_status = [200]
+
+# Note: DuckDNS only supports one TXT record per domain (shared by all subdomains).
+# The API uses query parameters for all operations. The profile uses GET for all methods.
+# Domain extraction: from _acme-challenge.example.duckdns.org -> example

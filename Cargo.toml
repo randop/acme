@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/acme-state", "crates/acme-challenge", "crates/acme-store", "crates/acme-core", "crates/acme-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+libc = "0.2"
+ring = "0.17"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+x509-parser = "0.18"
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio", "dns-over-https-rustls"] }
+hickory-proto = { version = "0.24", default-features = false }
+tempfile = "3"

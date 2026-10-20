@@ -1,0 +1,31 @@
+name = "dnspod"
+base_url = "https://dnsapi.cn"
+allowed_hosts = ["dnsapi.cn"]
+token_env = "ACME_DNS_DNSPOD_TOKEN"
+auth_type = "query"
+# Token format: "DP_Id,DP_Key" passed as login_token parameter
+
+[[zone_lookup]]
+method = "POST"
+url = "/Domain.Info"
+form = { login_token = "{{env.ACME_DNS_DNSPOD_TOKEN}}", format = "json", lang = "en", domain = "{{candidate_zone}}" }
+extract = { zone_id = "$.domain.id" }
+
+[[add]]
+method = "POST"
+url = "/Record.Create"
+form = { login_token = "{{env.ACME_DNS_DNSPOD_TOKEN}}", format = "json", lang = "en", domain_id = "{{zone_id}}", sub_domain = "{{record_name}}", record_type = "TXT", value = "{{txt_value}}", record_line = "默认" }
+expect_status = [200]
+extract = { record_id = "$.record.id" }
+
+[[find]]
+method = "POST"
+url = "/Record.List"
+form = { login_token = "{{env.ACME_DNS_DNSPOD_TOKEN}}", format = "json", lang = "en", domain_id = "{{zone_id}}", sub_domain = "{{record_name}}" }
+extract = { record_id = "$.records[0].id" }
+
+[[remove]]
+method = "POST"
+url = "/Record.Remove"
+form = { login_token = "{{env.ACME_DNS_DNSPOD_TOKEN}}", format = "json", lang = "en", domain_id = "{{zone_id}}", record_id = "{{record_id}}" }
+expect_status = [200]

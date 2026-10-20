@@ -1,0 +1,34 @@
+name = "desec"
+base_url = "https://desec.io/api/v1/domains"
+allowed_hosts = ["desec.io"]
+token_env = "ACME_DNS_DESEC_TOKEN"
+auth_type = "header"
+auth_header = "Authorization"
+# Token format: "Token YOUR_API_TOKEN"
+
+[[zone_lookup]]
+method = "GET"
+url = ""
+extract = { zone_id = "$..[?(@.name=='{{candidate_zone}}')].name" }
+
+[[add]]
+method = "PUT"
+url = "/{{zone_id}}/rrsets/"
+json = [{ subname = "{{record_name}}", type = "TXT", records = ["{{txt_value}}"], ttl = 3600 }]
+expect_status = [200]
+
+[[find]]
+method = "GET"
+url = "/{{zone_id}}/rrsets/{{record_name}}/TXT/"
+extract = { record_id = "$.subname" }
+
+[[remove]]
+method = "PUT"
+url = "/{{zone_id}}/rrsets/"
+json = [{ subname = "{{record_name}}", type = "TXT", records = [], ttl = 3600 }]
+expect_status = [200]
+
+# Note: deSEC uses rrsets (resource record sets) API.
+# To remove a specific value, we fetch existing records and rewrite the rrset without the target value.
+# The declarative profile handles add; remove requires native logic to preserve other values.
+# A native DnsProvider implementation is recommended for proper remove semantics.

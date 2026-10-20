@@ -1,0 +1,32 @@
+name = "porkbun"
+base_url = "https://api.porkbun.com/api/json/v3"
+allowed_hosts = ["api.porkbun.com"]
+token_env = "ACME_DNS_PORKBUN_API_KEY"
+auth_type = "query"
+# Porkbun includes API key and secret API key in the JSON body of every request
+# Credentials: PORKBUN_API_KEY, PORKBUN_SECRET_API_KEY
+
+[[zone_lookup]]
+method = "POST"
+url = "/dns/retrieve/{{candidate_zone}}"
+json = { apikey = "{{env.ACME_DNS_PORKBUN_API_KEY}}", secretapikey = "{{env.ACME_DNS_PORKBUN_SECRET_API_KEY}}" }
+extract = { zone_id = "$.domain" }
+
+[[add]]
+method = "POST"
+url = "/dns/create/{{zone_id}}"
+json = { name = "{{record_name}}", type = "TXT", content = "{{txt_value}}", ttl = 120, apikey = "{{env.ACME_DNS_PORKBUN_API_KEY}}", secretapikey = "{{env.ACME_DNS_PORKBUN_SECRET_API_KEY}}" }
+expect_status = [200]
+extract = { record_id = "$.id" }
+
+[[find]]
+method = "POST"
+url = "/dns/retrieve/{{zone_id}}"
+json = { apikey = "{{env.ACME_DNS_PORKBUN_API_KEY}}", secretapikey = "{{env.ACME_DNS_PORKBUN_SECRET_API_KEY}}" }
+extract = { record_id = "$..[?(@.type=='TXT' && @.name=='{{record_name}}' && @.content=='{{txt_value}}')].id" }
+
+[[remove]]
+method = "POST"
+url = "/dns/delete/{{zone_id}}/{{record_id}}"
+json = { apikey = "{{env.ACME_DNS_PORKBUN_API_KEY}}", secretapikey = "{{env.ACME_DNS_PORKBUN_SECRET_API_KEY}}" }
+expect_status = [200]
