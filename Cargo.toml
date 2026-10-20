@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/acme-state", "crates/acme-challenge", "crates/acme-store", "crates/acme-core", "crates/acme-cli"]
 
 [workspace.package]

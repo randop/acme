@@ -3,25 +3,18 @@ base_url = "https://api.cloudflare.com/client/v4"
 allowed_hosts = ["api.cloudflare.com"]
 token_env = "ACME_DNS_CLOUDFLARE_TOKEN"
 auth_type = "bearer"
-
-[[zone_lookup]]
-method = "GET"
-url = "/zones?name={{candidate_zone}}&per_page=100"
-extract = { zone_id = "$.result[0].id" }
-
-[[add]]
-method = "POST"
-url = "/zones/{{zone_id}}/dns_records"
-json = { type = "TXT", name = "{{fulldomain}}", content = "{{txt_value}}", ttl = 120 }
-expect_status = [200]
-extract = { record_id = "$.result.id" }
-
-[[find]]
-method = "GET"
-url = "/zones/{{zone_id}}/dns_records?type=TXT&name={{fulldomain}}&content={{txt_value}}"
-extract = { record_id = "$.result[0].id" }
-
-[[remove]]
-method = "DELETE"
-url = "/zones/{{zone_id}}/dns_records/{{record_id}}"
-expect_status = [200]
+zone_lookup_path = "/zones?name={{candidate_zone}}&per_page=100"
+zone_id_path = "id"
+zone_records_path = "result"
+zone_name_path = "name"
+add_path = "/zones/{{zone_id}}/dns_records"
+add_body = "{\"type\":\"TXT\",\"name\":\"{{fulldomain}}\",\"content\":\"{{txt_value}}\",\"ttl\":120}"
+record_id_path = "result.id"
+find_path = "/zones/{{zone_id}}/dns_records?type=TXT&name={{fulldomain}}&content={{txt_value}}"
+find_records_path = "result"
+find_id_path = "id"
+find_name_path = "name"
+find_type_path = "type"
+find_value_path = "content"
+find_relative_name = false
+remove_path = "/zones/{{zone_id}}/dns_records/{{record_id}}"

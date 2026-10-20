@@ -181,7 +181,10 @@ fn main() {
 fn run() -> Result<()> {
     let mut cli = Cli::parse();
     let cfg_path = config_path(cli.config.as_deref())?;
-    let cfg = load(&cfg_path)?;
+    let cfg = load(
+        &cfg_path,
+        cli.config.is_some() || std::env::var_os("ACME_CONFIG").is_some(),
+    )?;
     anyhow::ensure!(
         matches!(cfg.dns.wait_timeout_action.as_str(), "continue" | "fail"),
         "dns.wait_timeout_action must be 'continue' or 'fail'"
@@ -775,7 +778,8 @@ fn run() -> Result<()> {
                 !domain.starts_with("*."),
                 "use the base domain to revoke a wildcard lineage"
             );
-            let cert_dir = home_dir()?.join("certs").join(&domain);
+            let home = home_dir()?;
+            let cert_dir = home.join("certs").join(&domain);
             anyhow::ensure!(
                 cert_dir.join("metadata.json").is_file(),
                 "domain is not managed: {domain}"
@@ -785,7 +789,7 @@ fn run() -> Result<()> {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(acme_core::revoke_certificate(&cert_dir))?;
+            runtime.block_on(acme_core::revoke_certificate(&home, &cert_dir))?;
             if store_enabled(&cli, &cfg) {
                 let store = open_store(&cli, &cfg)?;
                 anyhow::ensure!(
@@ -964,8 +968,13 @@ fn renew(cli: &Cli, cfg: &Config, args: RenewArgs) -> Result<RenewResult> {
     let dirs: Vec<PathBuf> = if args.all {
         fs::read_dir(&cert_root)
             .with_context(|| format!("reading managed certificates from {}", cert_root.display()))?
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir() && p.join("metadata.json").is_file())
+            .map(|entry| {
+                let entry = entry?;
+                Ok(entry.metadata()?.is_dir().then(|| entry.path()))
+            })
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect()
     } else {
         let domain = args.domain.as_deref().context("domain is required")?;
@@ -986,175 +995,134 @@ fn renew(cli: &Cli, cfg: &Config, args: RenewArgs) -> Result<RenewResult> {
         .build()?;
     let mut renewed = 0usize;
     let mut failures = Vec::new();
+    if args.all && store_enabled(cli, cfg) {
+        if let Err(error) = open_store(cli, cfg).and_then(|store| store.list()) {
+            failures.push(format!(
+                "{}: cannot read renewal store: {error:#}",
+                cert_root.display()
+            ));
+        }
+    }
     let mut dns_timeout_failures = Vec::new();
     let mut any_due = false;
     for dir in dirs {
-        let metadata = match acme_core::read_certificate_metadata(&dir) {
-            Ok(v) => v,
-            Err(e) => {
-                failures.push(format!("{}: {e:#}", dir.display()));
-                continue;
-            }
-        };
-        anyhow::ensure!(
-            matches!(
-                metadata.challenge.as_str(),
-                "http-01" | "dns-01" | "dns-account-01" | "dns-persist-01" | "dns-alias"
-            ),
-            "{} uses unsupported renewal challenge {}",
-            dir.display(),
-            metadata.challenge
-        );
-        let lock = match DomainLock::acquire(&dir) {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                eprintln!("skipped {}: another renewal is running", dir.display());
-                continue;
-            }
-            Err(e) => {
-                failures.push(format!("{} lock: {e:#}", dir.display()));
-                continue;
-            }
-        };
-        let expiry = parse_datetime(&metadata.not_after)
-            .context("invalid not_after in certificate metadata")?;
-        let primary = metadata
-            .domains
-            .iter()
-            .find(|n| !n.starts_with("*."))
-            .context("managed lineage has no primary domain")?;
-        let ari = match runtime.block_on(acme_core::renewal_window(&dir)) {
-            Ok(window) => window,
-            Err(error) => {
-                eprintln!(
-                    "warning: ARI lookup failed for {primary}: {error:#}; using stored renewal time"
-                );
-                None
-            }
-        };
-        if let (Some((start, end)), true) = (&ari, store_enabled(cli, cfg)) {
-            if let Err(error) = store_path(cli, cfg)
-                .and_then(|p| Store::open(&p.path))
-                .and_then(|store| {
-                    anyhow::ensure!(
-                        store.set_ari_window(primary, start, end)?,
-                        "no certificate row for {primary}"
-                    );
-                    Ok(())
-                })
-            {
-                eprintln!("warning: could not persist ARI window for {primary}: {error:#}");
-            }
-        }
-        let stored_next = if store_enabled(cli, cfg) {
-            store_path(cli, cfg)
-                .and_then(|p| Store::open(&p.path))
-                .and_then(|store| Ok(store.status(primary)?.and_then(|row| row.next_renew)))
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
-        let now = chrono::Utc::now();
-        let due = if let Some((start, _)) = ari.as_ref() {
-            parse_datetime(start).is_some_and(|start| start <= now)
-        } else {
-            stored_next
-                .as_deref()
-                .and_then(parse_datetime)
-                .map_or(expiry <= now + chrono::Duration::days(30), |start| {
-                    start <= now
-                })
-        };
-        if !args.force && !due {
-            println!(
-                "not due: {} expires {}",
-                metadata.domains.join(", "),
-                metadata.not_after
+        let directory_result = (|| -> Result<()> {
+            let metadata = match acme_core::read_certificate_metadata(&dir) {
+                Ok(v) => v,
+                Err(e) => {
+                    failures.push(format!("{}: {e:#}", dir.display()));
+                    return Ok(());
+                }
+            };
+            anyhow::ensure!(
+                matches!(
+                    metadata.challenge.as_str(),
+                    "http-01" | "dns-01" | "dns-account-01" | "dns-persist-01" | "dns-alias"
+                ),
+                "{} uses unsupported renewal challenge {}",
+                dir.display(),
+                metadata.challenge
             );
-            record_store_event(
-                cli,
-                cfg,
-                primary,
-                "renew",
-                "skipped",
-                "certificate is not due for renewal",
-            )?;
-            drop(lock);
-            continue;
-        }
-        any_due = true;
-        let result = if metadata.challenge == "dns-alias" {
-            runtime.block_on(acme_core::issue_dns_alias(
-                &home,
-                &metadata.ca_directory,
-                &metadata.email,
-                &metadata.domains,
-                metadata
-                    .dns_alias
-                    .as_deref()
-                    .context("DNS alias renewal is missing its alias target")?,
-                metadata.dns_profile.as_deref(),
-                Duration::from_secs(cfg.dns.wait_initial_seconds),
-                Duration::from_secs(cfg.dns.wait_timeout_seconds),
-                Duration::from_secs(cfg.dns.wait_interval_seconds),
-                Duration::from_secs(cfg.dns.settle_seconds),
-                &cfg.dns.quorum,
-                dns_timeout_action,
-                &metadata.key_type,
-            ))
-        } else if metadata.challenge == "dns-persist-01" {
-            runtime.block_on(acme_core::issue_dns_persist(
-                &home,
-                &metadata.ca_directory,
-                &metadata.email,
-                &metadata.domains,
-                metadata.dns_profile.as_deref(),
-                Duration::from_secs(cfg.dns.wait_initial_seconds),
-                Duration::from_secs(cfg.dns.wait_timeout_seconds),
-                Duration::from_secs(cfg.dns.wait_interval_seconds),
-                Duration::from_secs(cfg.dns.settle_seconds),
-                &cfg.dns.quorum,
-                dns_timeout_action,
-                &metadata.key_type,
-            ))
-        } else if metadata.challenge == "dns-account-01" {
-            runtime.block_on(acme_core::issue_dns_account_manual(
-                &home,
-                &metadata.ca_directory,
-                &metadata.email,
-                &metadata.domains,
-                metadata.dns_profile.as_deref(),
-                Duration::from_secs(cfg.dns.wait_initial_seconds),
-                Duration::from_secs(cfg.dns.wait_timeout_seconds),
-                Duration::from_secs(cfg.dns.wait_interval_seconds),
-                Duration::from_secs(cfg.dns.settle_seconds),
-                &cfg.dns.quorum,
-                dns_timeout_action,
-                &metadata.key_type,
-            ))
-        } else if metadata.challenge == "dns-01" {
-            if let Some(provider) = metadata.dns_profile.as_deref() {
-                runtime.block_on(acme_core::issue_dns_provider_manual(
-                    &home,
-                    &metadata.ca_directory,
-                    &metadata.email,
-                    &metadata.domains,
-                    provider,
-                    Duration::from_secs(cfg.dns.wait_initial_seconds),
-                    Duration::from_secs(cfg.dns.wait_timeout_seconds),
-                    Duration::from_secs(cfg.dns.wait_interval_seconds),
-                    Duration::from_secs(cfg.dns.settle_seconds),
-                    &cfg.dns.quorum,
-                    dns_timeout_action,
-                    &metadata.key_type,
-                ))
+            let lock = match DomainLock::acquire(&dir) {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    eprintln!("skipped {}: another renewal is running", dir.display());
+                    return Ok(());
+                }
+                Err(e) => {
+                    failures.push(format!("{} lock: {e:#}", dir.display()));
+                    return Ok(());
+                }
+            };
+            let expiry = parse_datetime(&metadata.not_after)
+                .context("invalid not_after in certificate metadata")?;
+            let primary = metadata
+                .domains
+                .iter()
+                .find(|n| !n.starts_with("*."))
+                .context("managed lineage has no primary domain")?;
+            let ari = match runtime.block_on(acme_core::renewal_window(&dir)) {
+                Ok(window) => window,
+                Err(error) => {
+                    eprintln!(
+                        "warning: ARI lookup failed for {primary}: {error:#}; using stored renewal time"
+                    );
+                    None
+                }
+            };
+            if let (Some((start, end)), true) = (&ari, store_enabled(cli, cfg)) {
+                if let Err(error) = store_path(cli, cfg)
+                    .and_then(|p| Store::open(&p.path))
+                    .and_then(|store| {
+                        anyhow::ensure!(
+                            store.set_ari_window(primary, start, end)?,
+                            "no certificate row for {primary}"
+                        );
+                        Ok(())
+                    })
+                {
+                    eprintln!("warning: could not persist ARI window for {primary}: {error:#}");
+                }
+            }
+            let stored_next = if store_enabled(cli, cfg) {
+                let result = store_path(cli, cfg)
+                    .and_then(|p| Store::open(&p.path))
+                    .and_then(|store| Ok(store.status(primary)?.and_then(|row| row.next_renew)));
+                match result {
+                    Ok(next) => next,
+                    Err(error) if args.all || store_required(cli, cfg) => {
+                        return Err(error).context("cannot evaluate renewal: reading store data");
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "warning: could not read renewal time for {primary}: {error:#}; using certificate expiry"
+                        );
+                        None
+                    }
+                }
             } else {
-                runtime.block_on(acme_core::issue_dns_manual(
+                None
+            };
+            let now = chrono::Utc::now();
+            let due = if let Some((start, _)) = ari.as_ref() {
+                parse_datetime(start).is_some_and(|start| start <= now)
+            } else {
+                stored_next
+                    .as_deref()
+                    .and_then(parse_datetime)
+                    .map_or(expiry <= now + chrono::Duration::days(30), |start| {
+                        start <= now
+                    })
+            };
+            if !args.force && !due {
+                println!(
+                    "not due: {} expires {}",
+                    metadata.domains.join(", "),
+                    metadata.not_after
+                );
+                record_store_event(
+                    cli,
+                    cfg,
+                    primary,
+                    "renew",
+                    "skipped",
+                    "certificate is not due for renewal",
+                )?;
+                drop(lock);
+                return Ok(());
+            }
+            any_due = true;
+            let result = if metadata.challenge == "dns-alias" {
+                runtime.block_on(acme_core::issue_dns_alias(
                     &home,
                     &metadata.ca_directory,
                     &metadata.email,
                     &metadata.domains,
+                    metadata
+                        .dns_alias
+                        .as_deref()
+                        .context("DNS alias renewal is missing its alias target")?,
+                    metadata.dns_profile.as_deref(),
                     Duration::from_secs(cfg.dns.wait_initial_seconds),
                     Duration::from_secs(cfg.dns.wait_timeout_seconds),
                     Duration::from_secs(cfg.dns.wait_interval_seconds),
@@ -1163,77 +1131,144 @@ fn renew(cli: &Cli, cfg: &Config, args: RenewArgs) -> Result<RenewResult> {
                     dns_timeout_action,
                     &metadata.key_type,
                 ))
-            }
-        } else {
-            runtime.block_on(acme_core::issue_webroot(
-                &home,
-                &metadata.ca_directory,
-                &metadata.email,
-                &metadata.domains,
-                &metadata.webroot,
-                true,
-                &metadata.key_type,
-            ))
-        };
-        let issued = match result {
-            Ok(v) => v,
-            Err(e) => {
-                if let Some(timeout) = e.downcast_ref::<acme_core::DnsWaitTimeoutError>() {
-                    dns_timeout_failures.push(format!(
-                        "{}: {}",
-                        metadata.domains.join(", "),
-                        timeout
-                    ));
-                }
-                failures.push(format!("{}: {e:#}", metadata.domains.join(", ")));
-                drop(lock);
-                continue;
-            }
-        };
-        if store_enabled(cli, cfg) {
-            let saved = store_path(cli, cfg)
-                .and_then(|p| Store::open(&p.path))
-                .and_then(|s| {
-                    s.record_certificate(
-                        &metadata.domains,
+            } else if metadata.challenge == "dns-persist-01" {
+                runtime.block_on(acme_core::issue_dns_persist(
+                    &home,
+                    &metadata.ca_directory,
+                    &metadata.email,
+                    &metadata.domains,
+                    metadata.dns_profile.as_deref(),
+                    Duration::from_secs(cfg.dns.wait_initial_seconds),
+                    Duration::from_secs(cfg.dns.wait_timeout_seconds),
+                    Duration::from_secs(cfg.dns.wait_interval_seconds),
+                    Duration::from_secs(cfg.dns.settle_seconds),
+                    &cfg.dns.quorum,
+                    dns_timeout_action,
+                    &metadata.key_type,
+                ))
+            } else if metadata.challenge == "dns-account-01" {
+                runtime.block_on(acme_core::issue_dns_account_manual(
+                    &home,
+                    &metadata.ca_directory,
+                    &metadata.email,
+                    &metadata.domains,
+                    metadata.dns_profile.as_deref(),
+                    Duration::from_secs(cfg.dns.wait_initial_seconds),
+                    Duration::from_secs(cfg.dns.wait_timeout_seconds),
+                    Duration::from_secs(cfg.dns.wait_interval_seconds),
+                    Duration::from_secs(cfg.dns.settle_seconds),
+                    &cfg.dns.quorum,
+                    dns_timeout_action,
+                    &metadata.key_type,
+                ))
+            } else if metadata.challenge == "dns-01" {
+                if let Some(provider) = metadata.dns_profile.as_deref() {
+                    runtime.block_on(acme_core::issue_dns_provider_manual(
+                        &home,
                         &metadata.ca_directory,
+                        &metadata.email,
+                        &metadata.domains,
+                        provider,
+                        Duration::from_secs(cfg.dns.wait_initial_seconds),
+                        Duration::from_secs(cfg.dns.wait_timeout_seconds),
+                        Duration::from_secs(cfg.dns.wait_interval_seconds),
+                        Duration::from_secs(cfg.dns.settle_seconds),
+                        &cfg.dns.quorum,
+                        dns_timeout_action,
                         &metadata.key_type,
-                        &metadata.challenge,
-                        &issued.not_before,
-                        &issued.not_after,
-                        &issued.serial,
-                        &issued.fingerprint,
-                        &issued.order_url,
-                        "renew",
-                    )
-                });
-            if let Err(e) = saved {
-                if store_required(cli, cfg) {
-                    failures.push(format!(
-                        "{} issued but required store update failed: {e:#}",
-                        metadata.domains.join(", ")
-                    ));
+                    ))
                 } else {
-                    eprintln!("warning: renewal succeeded but store update failed: {e:#}");
+                    runtime.block_on(acme_core::issue_dns_manual(
+                        &home,
+                        &metadata.ca_directory,
+                        &metadata.email,
+                        &metadata.domains,
+                        Duration::from_secs(cfg.dns.wait_initial_seconds),
+                        Duration::from_secs(cfg.dns.wait_timeout_seconds),
+                        Duration::from_secs(cfg.dns.wait_interval_seconds),
+                        Duration::from_secs(cfg.dns.settle_seconds),
+                        &cfg.dns.quorum,
+                        dns_timeout_action,
+                        &metadata.key_type,
+                    ))
+                }
+            } else {
+                runtime.block_on(acme_core::issue_webroot(
+                    &home,
+                    &metadata.ca_directory,
+                    &metadata.email,
+                    &metadata.domains,
+                    &metadata.webroot,
+                    true,
+                    &metadata.key_type,
+                ))
+            };
+            let issued = match result {
+                Ok(v) => v,
+                Err(e) => {
+                    if let Some(timeout) = e.downcast_ref::<acme_core::DnsWaitTimeoutError>() {
+                        dns_timeout_failures.push(format!("{}: {}", dir.display(), timeout));
+                    }
+                    failures.push(format!("{}: {e:#}", dir.display()));
+                    drop(lock);
+                    return Ok(());
+                }
+            };
+            if store_enabled(cli, cfg) {
+                let saved = store_path(cli, cfg)
+                    .and_then(|p| Store::open(&p.path))
+                    .and_then(|s| {
+                        s.record_certificate(
+                            &metadata.domains,
+                            &metadata.ca_directory,
+                            &metadata.key_type,
+                            &metadata.challenge,
+                            &issued.not_before,
+                            &issued.not_after,
+                            &issued.serial,
+                            &issued.fingerprint,
+                            &issued.order_url,
+                            "renew",
+                        )
+                    });
+                if let Err(e) = saved {
+                    if store_required(cli, cfg) {
+                        failures.push(format!(
+                            "{} issued but required store update failed: {e:#}",
+                            dir.display()
+                        ));
+                    } else {
+                        eprintln!("warning: renewal succeeded but store update failed: {e:#}");
+                    }
                 }
             }
+            println!(
+                "renewed {} -> {}",
+                metadata.domains.join(", "),
+                issued.directory.display()
+            );
+            persist_dns_warnings(cli, cfg, &issued, &metadata.domains)?;
+            warn_deploy_error(apply_deploy_hooks(&cfg.hooks.deploy, &issued.directory));
+            warn_notification_error(runtime.block_on(send_notifications(
+                &cfg.hooks.notify,
+                "certificate_renewed",
+                &metadata.domains,
+                &issued.not_after,
+                &issued.dns_warnings,
+            )));
+            renewed += 1;
+            drop(lock);
+            Ok(())
+        })();
+        if let Err(error) = directory_result {
+            failures.push(format!("{}: {error:#}", dir.display()));
         }
-        println!(
-            "renewed {} -> {}",
-            metadata.domains.join(", "),
-            issued.directory.display()
-        );
-        persist_dns_warnings(cli, cfg, &issued, &metadata.domains)?;
-        warn_deploy_error(apply_deploy_hooks(&cfg.hooks.deploy, &issued.directory));
-        warn_notification_error(runtime.block_on(send_notifications(
-            &cfg.hooks.notify,
-            "certificate_renewed",
-            &metadata.domains,
-            &issued.not_after,
-            &issued.dns_warnings,
-        )));
-        renewed += 1;
-        drop(lock);
+    }
+    for failure in &failures {
+        eprintln!("renewal failed: {failure}");
+    }
+    for failure in &dns_timeout_failures {
+        eprintln!("DNS timeout: {failure}");
     }
     if !dns_timeout_failures.is_empty() {
         return Ok(RenewResult::DnsTimeout);

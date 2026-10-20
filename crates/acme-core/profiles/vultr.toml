@@ -3,25 +3,16 @@ base_url = "https://api.vultr.com/v2"
 allowed_hosts = ["api.vultr.com"]
 token_env = "ACME_DNS_VULTR_API_KEY"
 auth_type = "bearer"
-
-[[zone_lookup]]
-method = "GET"
-url = "/domains"
-extract = { zone_id = "$..[?(@.domain=='{{candidate_zone}}')].domain" }
-
-[[add]]
-method = "POST"
-url = "/domains/{{zone_id}}/records"
-json = { name = "{{record_name}}", data = "{{txt_value}}", type = "TXT" }
-expect_status = [201]
-extract = { record_id = "$.record.id" }
-
-[[find]]
-method = "GET"
-url = "/domains/{{zone_id}}/records"
-extract = { record_id = "$..[?(@.type=='TXT' && @.name=='{{record_name}}' && @.data=='{{txt_value}}')].id" }
-
-[[remove]]
-method = "DELETE"
-url = "/domains/{{zone_id}}/records/{{record_id}}"
-expect_status = [204]
+zone_lookup_path = "/domains/{{candidate_zone}}"
+zone_id_path = "domain.domain"
+add_path = "/domains/{{zone_id}}/records"
+add_body = "{\"name\":\"{{record_name}}\",\"data\":\"{{txt_value}}\",\"type\":\"TXT\"}"
+record_id_path = "record.id"
+find_path = "/domains/{{zone_id}}/records?per_page=500"
+find_records_path = "records"
+find_id_path = "id"
+find_name_path = "name"
+find_type_path = "type"
+find_value_path = "data"
+find_relative_name = true
+remove_path = "/domains/{{zone_id}}/records/{{record_id}}"

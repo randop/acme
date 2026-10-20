@@ -2,6 +2,7 @@
 name = "acme-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -22,3 +23,6 @@ tokio.workspace = true
 x509-parser.workspace = true
 hickory-resolver.workspace = true
 hickory-proto.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -597,6 +597,12 @@ struct DnsProfile {
     find_value_path: Option<String>,
     zone_lookup_path: String,
     zone_id_path: String,
+    #[serde(default)]
+    zone_records_path: Option<String>,
+    #[serde(default)]
+    zone_name_path: Option<String>,
+    #[serde(default)]
+    find_relative_name: bool,
     add_path: String,
     add_body: String,
     #[serde(default)]
@@ -615,49 +621,25 @@ struct AddedDnsRecord {
     cleanup_on_exit: bool,
 }
 
-const EPIK_PROFILE: &str = include_str!("../profiles/epik.toml");
-const CLOUDFLARE_PROFILE: &str = include_str!("../profiles/cloudflare.toml");
-const DIGITALOCEAN_PROFILE: &str = include_str!("../profiles/digitalocean.toml");
-const GODADDY_PROFILE: &str = include_str!("../profiles/godaddy.toml");
-const ALIDNS_PROFILE: &str = include_str!("../profiles/alidns.toml");
-const DNSPOD_PROFILE: &str = include_str!("../profiles/dnspod.toml");
-const NAMECHEAP_PROFILE: &str = include_str!("../profiles/namecheap.toml");
-const GCLOUD_PROFILE: &str = include_str!("../profiles/gcloud.toml");
-const AZURE_PROFILE: &str = include_str!("../profiles/azure.toml");
-const OVH_PROFILE: &str = include_str!("../profiles/ovh.toml");
-const VULTR_PROFILE: &str = include_str!("../profiles/vultr.toml");
-const LINODE_PROFILE: &str = include_str!("../profiles/linode.toml");
-const HEZTNER_PROFILE: &str = include_str!("../profiles/hetzner.toml");
-const PORKBUN_PROFILE: &str = include_str!("../profiles/porkbun.toml");
-const DESEC_PROFILE: &str = include_str!("../profiles/desec.toml");
-const GANDI_PROFILE: &str = include_str!("../profiles/gandi.toml");
-const DUCKDNS_PROFILE: &str = include_str!("../profiles/duckdns.toml");
-const LUADNS_PROFILE: &str = include_str!("../profiles/luadns.toml");
-const CLOUDDNS_PROFILE: &str = include_str!("../profiles/clouddns.toml");
+// Only providers supported by the generic GET/POST/DELETE request engine.
+const BUNDLED_PROFILES: &[(&str, &str)] = &[
+    ("epik", include_str!("../profiles/epik.toml")),
+    ("cloudflare", include_str!("../profiles/cloudflare.toml")),
+    (
+        "digitalocean",
+        include_str!("../profiles/digitalocean.toml"),
+    ),
+    ("vultr", include_str!("../profiles/vultr.toml")),
+    ("linode", include_str!("../profiles/linode.toml")),
+    ("hetzner", include_str!("../profiles/hetzner.toml")),
+    ("luadns", include_str!("../profiles/luadns.toml")),
+];
 
 fn dns_profile(home: &Path, name: &str) -> Result<DnsProfile> {
-    let bundled = match name {
-        "epik" => Some(EPIK_PROFILE),
-        "cloudflare" => Some(CLOUDFLARE_PROFILE),
-        "digitalocean" => Some(DIGITALOCEAN_PROFILE),
-        "godaddy" => Some(GODADDY_PROFILE),
-        "alidns" => Some(ALIDNS_PROFILE),
-        "dnspod" => Some(DNSPOD_PROFILE),
-        "namecheap" => Some(NAMECHEAP_PROFILE),
-        "gcloud" => Some(GCLOUD_PROFILE),
-        "azure" => Some(AZURE_PROFILE),
-        "ovh" => Some(OVH_PROFILE),
-        "vultr" => Some(VULTR_PROFILE),
-        "linode" => Some(LINODE_PROFILE),
-        "hetzner" => Some(HEZTNER_PROFILE),
-        "porkbun" => Some(PORKBUN_PROFILE),
-        "desec" => Some(DESEC_PROFILE),
-        "gandi" => Some(GANDI_PROFILE),
-        "duckdns" => Some(DUCKDNS_PROFILE),
-        "luadns" => Some(LUADNS_PROFILE),
-        "clouddns" => Some(CLOUDDNS_PROFILE),
-        _ => None,
-    };
+    let bundled = BUNDLED_PROFILES
+        .iter()
+        .find(|(selector, _)| *selector == name)
+        .map(|(_, content)| *content);
     let content = if let Some(content) = bundled {
         content.to_owned()
     } else {
@@ -801,6 +783,9 @@ async fn profile_request(
 
 fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     let mut current = value;
+    if path.is_empty() {
+        return Some(current);
+    }
     for segment in path.split('.') {
         current = if let Ok(index) = segment.parse::<usize>() {
             current.get(index)?
@@ -809,6 +794,27 @@ fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         };
     }
     Some(current)
+}
+
+fn profile_zone_id(profile: &DnsProfile, response: &Value, candidate: &str) -> Option<String> {
+    let zone = if let Some(records_path) = &profile.zone_records_path {
+        let name_path = profile.zone_name_path.as_deref()?;
+        json_path(response, records_path)?
+            .as_array()?
+            .iter()
+            .find(|zone| {
+                json_path(zone, name_path)
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.trim_end_matches('.').eq_ignore_ascii_case(candidate))
+            })?
+    } else {
+        response
+    };
+    match json_path(zone, &profile.zone_id_path)? {
+        Value::String(id) => Some(id.clone()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
 }
 
 async fn provider_add(
@@ -829,17 +835,16 @@ async fn provider_add(
     for index in 0..labels.len() {
         let candidate = labels[index..].join(".");
         let path = render_profile(&profile.zone_lookup_path, &[("candidate_zone", &candidate)])?;
-        let response = match profile_request(&profile, &token, reqwest::Method::GET, &path, None)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) if profile.name == "epik" && format!("{error:#}").contains("HTTP 404") => {
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        if let Some(id) = json_path(&response, &profile.zone_id_path).and_then(Value::as_str) {
-            zone = Some((candidate, id.to_owned()));
+        let response =
+            match profile_request(&profile, &token, reqwest::Method::GET, &path, None).await {
+                Ok(response) => response,
+                Err(error) if format!("{error:#}").contains("HTTP 404") => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+        if let Some(id) = profile_zone_id(&profile, &response, &candidate) {
+            zone = Some((candidate, id));
             break;
         }
     }
@@ -919,7 +924,15 @@ async fn find_profile_record(
     let Some(find_path) = profile.find_path.as_deref() else {
         return Ok(None);
     };
-    let path = render_profile(find_path, &[("zone_id", zone_id)])?;
+    let path = render_profile(
+        find_path,
+        &[
+            ("zone_id", zone_id),
+            ("fulldomain", full_name),
+            ("record_name", relative_name),
+            ("txt_value", value),
+        ],
+    )?;
     let response = profile_request(profile, token, reqwest::Method::GET, &path, None).await?;
     let records_path = profile
         .find_records_path
@@ -948,14 +961,16 @@ async fn find_profile_record(
         let Some(record_name) = json_path(record, name_paths).and_then(Value::as_str) else {
             continue;
         };
-        let expected_name = if profile.name == "epik" {
+        let expected_name = if profile.find_relative_name {
             relative_name
         } else {
             full_name
         };
         let record_type = json_path(record, type_path).and_then(Value::as_str);
         let record_value = json_path(record, value_path).and_then(Value::as_str);
-        if record_name.eq_ignore_ascii_case(expected_name)
+        if record_name
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(expected_name.trim_end_matches('.'))
             && record_type == Some("TXT")
             && record_value == Some(value)
         {
@@ -1102,14 +1117,13 @@ async fn issue_inner(
         .collect();
     let mut order_payload = json!({"identifiers":identifiers});
     if acme.directory.renewal_info.is_some() {
-        if let Some(replaces) = certificate_replacement_id(
-            &home.join("certs").join(
-                names
-                    .iter()
-                    .find(|n| !n.starts_with("*."))
-                    .context("certificate requires base identifier")?,
-            ),
-        )? {
+        let prior_dir = home.join("certs").join(
+            names
+                .iter()
+                .find(|n| !n.starts_with("*."))
+                .context("certificate requires base identifier")?,
+        );
+        if let Some(replaces) = replacement_for_ca(&prior_dir, directory_url)? {
             order_payload["replaces"] = Value::String(replaces);
         }
     }
@@ -1488,11 +1502,10 @@ async fn dns_txt_visible(
 }
 
 async fn find_authoritative_nameservers(name: &str) -> Result<Vec<std::net::SocketAddr>> {
-    use hickory_resolver::TokioAsyncResolver;
-    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
     use hickory_proto::rr::{RecordType, RecordData};
     use hickory_proto::rr::rdata::name::NS;
-    use std::net::ToSocketAddrs;
+    use hickory_resolver::TokioAsyncResolver;
+    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 
     let resolver = TokioAsyncResolver::tokio(
         ResolverConfig::cloudflare(),
@@ -1506,9 +1519,9 @@ async fn find_authoritative_nameservers(name: &str) -> Result<Vec<std::net::Sock
             for record in ns_response.record_iter() {
                 if let Some(rdata) = record.data() {
                     if let Some(ns) = NS::try_borrow(rdata) {
-                        if let Ok(addrs) = ns.0.to_string().to_socket_addrs() {
+                        if let Ok(addrs) = resolver.lookup_ip(ns.0.to_string()).await {
                             for addr in addrs {
-                                servers.push(addr);
+                                servers.push(std::net::SocketAddr::new(addr, 53));
                             }
                         }
                     }
@@ -1579,15 +1592,8 @@ pub async fn register_account(home: &Path, directory: &str, email: &str) -> Resu
     Ok(acme.credentials.account_url)
 }
 
-pub async fn revoke_certificate(cert_dir: &Path) -> Result<()> {
+pub async fn revoke_certificate(home: &Path, cert_dir: &Path) -> Result<()> {
     let metadata = read_certificate_metadata(cert_dir)?;
-    let home = if let Some(path) = std::env::var_os("ACME_HOME") {
-        PathBuf::from(path)
-    } else {
-        dirs::home_dir()
-            .context("could not determine home directory")?
-            .join(".acme")
-    };
     let account_path = home
         .join("account")
         .join(format!("{}.json", account_name(&metadata.ca_directory)));
@@ -1654,6 +1660,16 @@ pub async fn renewal_window(cert_dir: &Path) -> Result<Option<(String, String)>>
         .as_str()
         .context("ARI response has no window end")?;
     Ok(Some((start.to_owned(), end.to_owned())))
+}
+
+fn replacement_for_ca(cert_dir: &Path, directory_url: &str) -> Result<Option<String>> {
+    if read_certificate_metadata(cert_dir)
+        .is_ok_and(|metadata| metadata.ca_directory == directory_url)
+    {
+        certificate_replacement_id(cert_dir)
+    } else {
+        Ok(None)
+    }
 }
 
 fn certificate_replacement_id(cert_dir: &Path) -> Result<Option<String>> {
@@ -1820,18 +1836,18 @@ pub fn resolve_ca(value: &str) -> Result<(Ca, Option<String>)> {
     })
 }
 
-fn cleanup_all(paths: &[PathBuf]) {
+fn cleanup_all(paths: &[acme_challenge::Http01File]) {
     for path in paths {
         if let Err(error) = acme_challenge::cleanup(path) {
             eprintln!(
                 "warning: failed to remove challenge file {}: {error}",
-                path.display()
+                path.path().display()
             );
         }
     }
 }
 #[derive(Default)]
-struct ChallengeCleanup(Vec<PathBuf>);
+struct ChallengeCleanup(Vec<acme_challenge::Http01File>);
 impl Drop for ChallengeCleanup {
     fn drop(&mut self) {
         cleanup_all(&self.0)
@@ -1843,6 +1859,107 @@ mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use sha2::Digest;
+
+    #[test]
+    fn every_bundled_profile_parses_and_renders() {
+        let home = tempfile::tempdir().unwrap();
+        for (name, _) in BUNDLED_PROFILES {
+            let profile = dns_profile(home.path(), name).unwrap();
+            assert!(matches!(
+                profile.auth_type.as_str(),
+                "bearer" | "header" | "query"
+            ));
+            let vars = [
+                ("candidate_zone", "example.com"),
+                ("zone_id", "42"),
+                ("record_id", "7"),
+                ("fulldomain", "_acme-challenge.example.com"),
+                ("record_name", "_acme-challenge"),
+                ("txt_value", "value"),
+                ("zone", "example.com"),
+                ("ttl", "120"),
+            ];
+            for path in [
+                &profile.zone_lookup_path,
+                &profile.add_path,
+                &profile.remove_path,
+                profile.find_path.as_ref().unwrap(),
+            ] {
+                render_profile(path, &vars).unwrap();
+            }
+            let body = render_profile(&profile.add_body, &vars).unwrap();
+            serde_json::from_str::<Value>(&body).unwrap();
+            assert!(profile.find_records_path.is_some());
+            assert!(profile.find_id_path.is_some());
+            assert!(profile.find_name_path.is_some());
+            assert!(profile.find_type_path.is_some());
+            assert!(profile.find_value_path.is_some());
+        }
+        for unsupported in [
+            "alidns",
+            "azure",
+            "gcloud",
+            "clouddns",
+            "ovh",
+            "namecheap",
+            "porkbun",
+            "dnspod",
+            "duckdns",
+            "godaddy",
+            "gandi",
+            "desec",
+        ] {
+            assert!(dns_profile(home.path(), unsupported).is_err());
+        }
+    }
+
+    #[test]
+    fn zone_lookup_selects_matching_name_and_numeric_id() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = dns_profile(home.path(), "linode").unwrap();
+        let response = json!({"data": [
+            {"id": 1, "domain": "unrelated.example"},
+            {"id": 2, "domain": "example.com"}
+        ]});
+        assert_eq!(
+            profile_zone_id(&profile, &response, "example.com"),
+            Some("2".into())
+        );
+        assert_eq!(
+            profile_zone_id(&profile, &response, "missing.example"),
+            None
+        );
+    }
+
+    #[test]
+    fn replacement_requires_matching_ca_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("cert.pem"), "invalid certificate").unwrap();
+        assert!(
+            replacement_for_ca(dir.path(), LE_DIRECTORY)
+                .unwrap()
+                .is_none()
+        );
+        fs::write(dir.path().join("metadata.json"), "invalid metadata").unwrap();
+        assert!(
+            replacement_for_ca(dir.path(), LE_DIRECTORY)
+                .unwrap()
+                .is_none()
+        );
+        let mut metadata = json!({"domains": ["example.com"], "ca_directory": LE_STAGING_DIRECTORY,
+            "challenge": "http-01", "not_after": "2030-01-01T00:00:00Z", "webroot": "/tmp",
+            "email": "test@example.com", "key_type": "ec-256"});
+        fs::write(dir.path().join("metadata.json"), metadata.to_string()).unwrap();
+        assert!(
+            replacement_for_ca(dir.path(), LE_DIRECTORY)
+                .unwrap()
+                .is_none()
+        );
+        metadata["ca_directory"] = json!(LE_DIRECTORY);
+        fs::write(dir.path().join("metadata.json"), metadata.to_string()).unwrap();
+        // Matching metadata reaches the existing certificate parser.
+        assert!(replacement_for_ca(dir.path(), LE_DIRECTORY).is_err());
+    }
 
     #[test]
     fn test_validate_identifier_valid() {

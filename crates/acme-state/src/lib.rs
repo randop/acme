@@ -112,10 +112,10 @@ pub fn config_path(cli: Option<&Path>) -> Result<PathBuf> {
     }
     Ok(home_dir()?.join("config.toml"))
 }
-pub fn load(path: &Path) -> Result<Config> {
+pub fn load(path: &Path, explicit: bool) -> Result<Config> {
     match fs::read_to_string(path) {
         Ok(s) => toml::from_str(&s).with_context(|| format!("parsing config {}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(e) => Err(e).with_context(|| format!("reading config {}", path.display())),
     }
 }
@@ -163,7 +163,8 @@ mod tests {
     fn test_load_default_config() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
-        let cfg = load(&config_path).unwrap();
+        assert!(load(&config_path, true).is_err());
+        let cfg = load(&config_path, false).unwrap();
         assert_eq!(cfg.ca.default, "zerossl");
     }
 
@@ -177,7 +178,7 @@ mod tests {
             [defaults]
             key_type = "ec-384"
         "#).unwrap();
-        let cfg = load(&config_path).unwrap();
+        let cfg = load(&config_path, false).unwrap();
         assert_eq!(cfg.ca.default, "letsencrypt");
         assert_eq!(cfg.defaults.key_type, "ec-384");
     }

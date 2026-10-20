@@ -4,27 +4,18 @@ allowed_hosts = ["api.luadns.com"]
 token_env = "ACME_DNS_LUA_KEY"
 auth_type = "header"
 auth_header = "Authorization"
-# Uses HTTP Basic Auth: "Basic base64(Email:Key)"
-# Credentials: LUA_Email, LUA_Key
-
-[[zone_lookup]]
-method = "GET"
-url = "/zones"
-extract = { zone_id = "$..[?(@.name=='{{candidate_zone}}')].id" }
-
-[[add]]
-method = "POST"
-url = "/zones/{{zone_id}}/records"
-json = { type = "TXT", name = "{{fulldomain}}.", content = "{{txt_value}}", ttl = 120 }
-expect_status = [201]
-extract = { record_id = "$.id" }
-
-[[find]]
-method = "GET"
-url = "/zones/{{zone_id}}/records"
-extract = { record_id = "$..[?(@.type=='TXT' && @.name=='{{fulldomain}}.' && @.content=='{{txt_value}}')].id" }
-
-[[remove]]
-method = "DELETE"
-url = "/zones/{{zone_id}}/records/{{record_id}}"
-expect_status = [200]
+zone_lookup_path = "/zones"
+zone_id_path = "id"
+zone_records_path = ""
+zone_name_path = "name"
+add_path = "/zones/{{zone_id}}/records"
+add_body = "{\"type\":\"TXT\",\"name\":\"{{fulldomain}}.\",\"content\":\"{{txt_value}}\",\"ttl\":120}"
+record_id_path = "id"
+find_path = "/zones/{{zone_id}}/records"
+find_records_path = ""
+find_id_path = "id"
+find_name_path = "name"
+find_type_path = "type"
+find_value_path = "content"
+find_relative_name = false
+remove_path = "/zones/{{zone_id}}/records/{{record_id}}"

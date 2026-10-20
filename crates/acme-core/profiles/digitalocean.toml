@@ -3,25 +3,16 @@ base_url = "https://api.digitalocean.com/v2"
 allowed_hosts = ["api.digitalocean.com"]
 token_env = "ACME_DNS_DIGITALOCEAN_TOKEN"
 auth_type = "bearer"
-
-[[zone_lookup]]
-method = "GET"
-url = "/domains?name={{candidate_zone}}"
-extract = { zone_id = "$.domains[0].name" }
-
-[[add]]
-method = "POST"
-url = "/domains/{{zone_id}}/records"
-json = { type = "TXT", name = "{{record_name}}", data = "{{txt_value}}", ttl = 120 }
-expect_status = [201]
-extract = { record_id = "$.domain_record.id" }
-
-[[find]]
-method = "GET"
-url = "/domains/{{zone_id}}/records?type=TXT&name={{record_name}}"
-extract = { record_id = "$.domain_records[0].id" }
-
-[[remove]]
-method = "DELETE"
-url = "/domains/{{zone_id}}/records/{{record_id}}"
-expect_status = [204]
+zone_lookup_path = "/domains/{{candidate_zone}}"
+zone_id_path = "domain.name"
+add_path = "/domains/{{zone_id}}/records"
+add_body = "{\"type\":\"TXT\",\"name\":\"{{record_name}}\",\"data\":\"{{txt_value}}\",\"ttl\":120}"
+record_id_path = "domain_record.id"
+find_path = "/domains/{{zone_id}}/records?type=TXT&per_page=200"
+find_records_path = "domain_records"
+find_id_path = "id"
+find_name_path = "name"
+find_type_path = "type"
+find_value_path = "data"
+find_relative_name = true
+remove_path = "/domains/{{zone_id}}/records/{{record_id}}"
